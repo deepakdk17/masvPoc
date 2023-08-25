@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://dl.massive.io/masv-uploader.js"></script>
+  <title>MASV UPLOADER</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #f4f4f4;
+    }
+
+    .container {
+      background-color: #ffffff;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      text-align: center;
+      width: 300px;
+    }
+    label {
+      text-align: left;
+    }
+
+    input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+    }
+
+    .file-input {
+      margin-bottom: 10px;
+    }
+
+    button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+
+    #status {
+      margin-top: 10px;
+    }
+
+    #downloadButton {
+      display: none;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>MASV UPLOADER TEST</h1>
+    <input id="fileupload" class="file-input" type="file" multiple />
+    <label for="senderEmail">Sender Email:</label>
+    <input type="email" id="senderEmail" name="senderEmail" required /><br /><br />
+    <label for="packageName">Package Name:</label>
+    <input type="text" id="packageName" name="packageName" required /><br /><br />
+    <button type="button" onclick="startUpload()">Upload</button>
+    <p id="status">Upload Status: Idle</p>
+    <button id="downloadButton" onclick="redirectToDownload()">Download</button>
+  </div>
+  <script>
+    let packageID;
+    let packageToken;
+    let portalID;
+    let packageName;
+    async function fetchPortalID(subdomain) {
+      try {
+        const resp = await fetch(
+          `https://api.massive.app/v1/subdomains/portals/${subdomain}`
+        );
+
+        if (!resp.ok) {
+          throw new Error("Could not load portal info");
+        }
+        const data = await resp.json();
+        portalID = data.id;
+        return portalID
+      } catch (error) {
+        console.error(error);
+        alert("An error occurred while fetching portal info");
+      }
+    }
+
+    async function createPackage(
+      portalID,
+      senderEmail,
+      packageName = packageName,
+      packageDescription = ""
+    ) {
+      try {
+        const headers = { "Content-Type": "application/json" };
+        const body = {
+          sender: senderEmail,
+          name: packageName,
+          description: packageDescription,
+        };
+
+        const resp = await fetch(
+          `https://api.massive.app/v1/portals/${portalID}/packages`,
+          {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify(body),
+          }
+        );
+
+        if (!resp.ok) {
+          throw new Error(
+            "Insufficient permission, for example in a password protected portal"
+          );
+        }
+
+        const data = await resp.json();
+        packageID = data.id;
+        packageToken = data.access_token;
+
+        return {
+          packageID,
+          packageToken,
+        };
+      } catch (error) {
+        console.error(error);
+        alert("An error occurred while creating the package");
+      }
+    }
+
+    async function startUpload(e) {
+      const subdomain = getQueryParam("subdomain");
+      const portalID = await fetchPortalID(subdomain);
+      const senderEmail = document.getElementById("senderEmail").value;
+      packageName = document.getElementById("packageName").value;
+      const { packageID, packageToken } = await createPackage(
+        portalID,
+        senderEmail,
+        packageName
+      );
+      const fileList = document.getElementById("fileupload").files;
+      const filesArray = [];
+
+      for (var i = 0; i < fileList.length; i++) {
+        filesArray.push({
+          file: fileList[i],
+          path: "",
+          id: i,
+        });
+      }
+
+      const statusEl = document.getElementById("status");
+      statusEl.innerHTML = "Started";
+
+      const uploader = new MASV.Uploader(
+        packageID,
+        packageToken,
+        "https://api.massive.app"
+      );
+      console.log("File uploaded completed:", uploader);
+      let lastTransferred = 0;
+      let startTime = Date.now();
+
+      let listener = {
+        onFileComplete: (f) => {
+          console.log("File uploaded completed:", f.file.name);
+        },
+        onComplete: async () => {
+          statusEl.innerHTML = "Completed";
+          document.getElementById("downloadButton").style.display = "block";
+        },
+        onError: (e) => {
+          console.log("Unrecoverable upload error", e);
+        },
+        onProgress: (transferred, total, speedStat) => {
+          const progress = Math.floor((transferred / total) * 100);
+          statusEl.innerHTML = `Upload progress: ${progress}%`;
+
+          const elapsedMilliseconds = Date.now() - startTime;
+          const averageSpeedBitsPerSecond = speedStat.average;
+          const remainingBits = (total - transferred) * 8;
+          const remainingSeconds = remainingBits / averageSpeedBitsPerSecond;
+          const remainingMilliseconds = remainingSeconds * 1000;
+          const etaMilliseconds = elapsedMilliseconds + remainingMilliseconds;
+        },
+        onRetry: (e) => {
+          console.log("retrying because:", e);
+        },
+      };
+
+      uploader.setListener(listener);
+
+      uploader.upload(...filesArray);
+    }
+    async function redirectToDownload() {
+      const userToken = getQueryParam('userToken');
+      console.log("userToken", userToken);
+      const url = `https://api.massive.app/v1/portals/${portalID}/packages`;
+      const headers = {
+        'X-User-Token': userToken,
+      };
+
+      const params = {
+        expired: '1',
+        finalized: '1',
+        new: '0'
+      };
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: headers,
+          params: params
+        });
+        if (response.ok) {
+
+          const data = await response.json();
+          console.log("package name", packageName);
+          const packageToFind = data.find(package => package.name === packageName);
+
+          if (packageToFind) {
+            const packageAccessToken = packageToFind.access_token;
+            console.log('Access Token:', packageAccessToken);
+            const EMAIL = '';
+            const PASSWORD = '';
+            createPackageLink(packageID, packageAccessToken, EMAIL, PASSWORD);
+          } else {
+            console.log('Package not found with the specified name.');
+          }
+        } else {
+          console.error('API request failed:', response.status, response.statusText);
+        }
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
+    async function createPackageLink(packageID, packageAccessToken, email, password) {
+      const url = `https://api.massive.app/v1/packages/${packageID}/links`;
+      const headers = {
+        'X-Package-Token': packageAccessToken,
+        'Content-Type': 'application/json'
+      };
+      const body = JSON.stringify({
+        email: email,
+        password: password
+      });
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: headers,
+          body: body
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const linkID = data.id;
+          console.log("id", linkID);
+          const secret = data.download_secret;
+          console.log("secret", secret);
+          window.location.href = `https://get.massive.app/${linkID}?secret=${secret}`;
+        } else {
+          console.error('API request failed:', response.status, response.statusText);
+        }
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
+    function getQueryParam(param) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(param);
+    }
+  </script>
+</body>
+
+</html>
